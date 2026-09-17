@@ -17,18 +17,28 @@ const commonMimeTypesSignatures = {
   R0lGODdh: 'image/gif',
   R0lGODlh: 'image/gif',
   iVBORw0KGgo: 'image/png',
-  '/9j/': 'image/jpg',
+  '/9j/': 'image/jpeg',
+  UklGR: 'image/webp',
 };
 
+function normalizeBase64String(base64String: string) {
+  const trimmed = base64String.trim();
+  const dataUrlMatch = trimmed.match(/^data:.*?;base64,(.*)$/is);
+  const payload = dataUrlMatch ? dataUrlMatch[1] : trimmed;
+  return payload.replace(/\s/g, '');
+}
+
 function getMimeTypeFromBase64({ base64String }: { base64String: string }) {
-  const [, mimeTypeFromBase64] = base64String.match(/data:(.*?);base64/i) ?? [];
+  const normalized = base64String.trim();
+  const [, mimeTypeFromBase64] = normalized.match(/^data:(.*?);base64,/i) ?? [];
 
   if (mimeTypeFromBase64) {
     return { mimeType: mimeTypeFromBase64 };
   }
 
+  const cleanBase64 = normalizeBase64String(base64String);
   const inferredMimeType = _.find(commonMimeTypesSignatures, (_mimeType, signature) =>
-    base64String.startsWith(signature),
+    cleanBase64.startsWith(signature),
   );
 
   if (inferredMimeType) {
@@ -52,6 +62,21 @@ function getFileExtensionFromMimeType({
   return defaultExtension;
 }
 
+function toDataUrl(base64String: string, mimeType?: string) {
+  const trimmed = base64String.trim();
+  if (/^data:.*?;base64,/i.test(trimmed)) {
+    const [header, payload = ''] = trimmed.split(',', 2);
+    return `${header},${payload.replace(/\s/g, '')}`;
+  }
+
+  const cleanBase64 = normalizeBase64String(trimmed);
+  if (!mimeType) {
+    throw new Error('Unable to infer MIME type from Base64 string');
+  }
+
+  return `data:${mimeType};base64,${cleanBase64}`;
+}
+
 function downloadFromBase64({
   sourceValue,
   filename,
@@ -63,21 +88,21 @@ function downloadFromBase64({
   extension?: string;
   fileMimeType?: string;
 }) {
-  if (sourceValue === '') {
+  if (sourceValue.trim() === '') {
     throw new Error('Base64 string is empty');
   }
 
-  const defaultExtension = extension ?? 'txt';
   const { mimeType } = getMimeTypeFromBase64({ base64String: sourceValue });
-  let base64String = sourceValue;
-  if (!mimeType) {
-    const targetMimeType = fileMimeType ?? getMimeTypeFromExtension(defaultExtension);
-    base64String = `data:${targetMimeType};base64,${sourceValue}`;
-  }
+  const defaultExtension = extension ?? getFileExtensionFromMimeType({ mimeType });
+  const targetMimeType = mimeType ?? fileMimeType ?? getMimeTypeFromExtension(defaultExtension);
+  const base64String = toDataUrl(sourceValue, targetMimeType);
 
-  const cleanExtension = extension ?? getFileExtensionFromMimeType({ mimeType, defaultExtension });
+  const cleanExtension = extension ?? getFileExtensionFromMimeType({
+    mimeType: targetMimeType,
+    defaultExtension,
+  });
   let cleanFileName = filename ?? `file.${cleanExtension}`;
-  if (extension && !cleanFileName.endsWith(`.${extension}`)) {
+  if (extension && !cleanFileName.toLowerCase().endsWith(`.${extension.toLowerCase()}`)) {
     cleanFileName = `${cleanFileName}.${cleanExtension}`;
   }
 
@@ -104,15 +129,16 @@ function useDownloadFileFromBase64({
 }
 
 function previewImageFromBase64(base64String: string): HTMLImageElement {
-  if (base64String === '') {
+  if (base64String.trim() === '') {
     throw new Error('Base64 string is empty');
   }
 
-  let dataUriBase64String = base64String;
-  if (!base64String.startsWith('data:')) {
-    dataUriBase64String = `data:application/octet-stream;base64,${base64String}`;
+  const { mimeType } = getMimeTypeFromBase64({ base64String });
+  if (!mimeType?.startsWith('image/')) {
+    throw new Error('Base64 string does not contain a supported image MIME type');
   }
 
+  const dataUriBase64String = toDataUrl(base64String, mimeType);
   const img = document.createElement('img');
   img.src = dataUriBase64String;
 
